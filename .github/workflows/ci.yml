@@ -16,8 +16,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # setup-python no longer ships 3.9 for current Ubuntu images; 3.9 is covered below with
+        # the macOS system interpreter, which is what most users of these skills actually run.
         os: [ubuntu-latest, macos-latest]
-        python: ["3.9", "3.12"]
+        python: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,6 +37,19 @@ jobs:
           test -f "$RUNNER_TEMP/skills/swiftui-state-layout/SKILL.md"
       - name: MCP server starts (macOS tools may be unavailable on Linux)
         run: python mcp-server/server.py --call xcode_environment
+
+  macos-system-python:
+    name: macos-latest / system python3 (3.9)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Interpreter
+        run: /usr/bin/python3 --version
+      - name: Validate skills
+        run: /usr/bin/python3 tools/validate_skills.py
+      - name: Unit + MCP end-to-end tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
 
   shellcheck:
     runs-on: ubuntu-latest

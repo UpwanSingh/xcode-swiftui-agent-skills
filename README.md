@@ -187,7 +187,7 @@ python3 skills/ios-crash-log-triage/scripts/crash_report.py list --app MyApp
 ├── evals/scenarios.json             # agent-behaviour scenarios
 ├── .claude-plugin/                  # Claude Code plugin + marketplace manifests
 ├── install.sh                       # multi-agent skill installer
-└── .github/                         # CI (Linux + macOS, Python 3.9 & 3.12), templates
+└── .github/                         # CI (Linux + macOS; Python 3.10, 3.12 and macOS system 3.9), templates
 ```
 
 ---
