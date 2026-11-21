@@ -1,0 +1,5 @@
+2026-11-20 10:15:01.123 BuggyApp[123:4567] [SwiftUI] Publishing changes from background threads is not allowed; make sure to publish values from the main thread (via operators like receive(on:)) on model updates.
+2026-11-20 10:15:01.456 BuggyApp[123:4567] [SwiftUI] Publishing changes from background threads is not allowed; make sure to publish values from the main thread (via operators like receive(on:)) on model updates.
+2026-11-20 10:15:02.000 BuggyApp[123:4567] onChange(of: String) action tried to update multiple times per frame.
+2026-11-20 10:15:03.000 BuggyApp[123:4567] 12.2.0 - [FirebaseFirestore][I-FST000001] Listen for query at posts failed: Missing or insufficient permissions.
+2026-11-20 10:15:04.000 BuggyApp[123:4567] A NavigationLink is presenting a value of type "String" but there is no matching navigationDestination declaration visible from the location of the link.

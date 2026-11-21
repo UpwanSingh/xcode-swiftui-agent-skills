@@ -1,0 +1,16 @@
+{
+  "name": "xcode-swiftui-agent-skills",
+  "owner": { "name": "UpwanSingh" },
+  "metadata": {
+    "description": "iOS / SwiftUI / Xcode debugging skills and MCP tools",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ios-debug-pack",
+      "source": "./",
+      "description": "Four debugging skills (SwiftUI state & layout, Xcode build & signing, MapKit & Firebase, crash & log triage) and a read-only Xcode diagnostics MCP server.",
+      "category": "development"
+    }
+  ]
+}

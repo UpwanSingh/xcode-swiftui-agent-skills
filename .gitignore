@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Never commit signing material or credentials
+*.p12
+*.p8
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+*.keychain-db
+AuthKey_*
+.env
+.env.*
+*-firebase-adminsdk-*.json
+service-account*.json
+
+# Local agent/workspace files
+.context/
+.claude/settings.local.json

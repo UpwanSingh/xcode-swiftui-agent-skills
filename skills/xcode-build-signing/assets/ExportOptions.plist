@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for: xcodebuild -exportArchive -archivePath App.xcarchive \
+                           -exportOptionsPlist ExportOptions.plist -exportPath build/export
+
+  method (Xcode 15.3+ names; older Xcode accepts app-store / ad-hoc / development):
+    app-store-connect   TestFlight / App Store upload
+    release-testing     ad hoc distribution to registered devices
+    debugging           development distribution
+    enterprise          in-house (Enterprise program)
+
+  Replace every REPLACE_ME value. Contains no secrets; do not add passwords here.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>REPLACE_ME_TEAM_ID</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- For manual signing set signingStyle to "manual" and map each bundle id
+	     (app AND every extension) to a provisioning profile name:
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.example.app</key>
+		<string>Example App Store Profile</string>
+		<key>com.example.app.widget</key>
+		<string>Example Widget App Store Profile</string>
+	</dict>
+	-->
+	<key>destination</key>
+	<string>export</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

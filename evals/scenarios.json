@@ -1,0 +1,92 @@
+{
+  "description": "Agent-level evaluation scenarios. Run each prompt in an agent with the skills installed, with tests/fixtures/BuggyApp as the working project, and grade the transcript against `expect`. `should_trigger` lists the skill that should load; `must_not` lists behaviours that fail the scenario.",
+  "fixture_root": "tests/fixtures/BuggyApp",
+  "scenarios": [
+    {
+      "id": "swiftui-loop-01",
+      "should_trigger": "swiftui-state-layout",
+      "prompt": "My ListScreen in App/ContentView.swift keeps re-rendering and the scroll position resets. Why?",
+      "expect": [
+        "runs scripts/swiftui_lint.py (or the swiftui_lint MCP tool) on App/",
+        "identifies .id(UUID()) (SUI006) as the identity reset",
+        "mentions the onChange(of: query) self-write (SUI007) and GeometryReader size write (SUI008)",
+        "proposes stable identity and a guarded/derived value, not DispatchQueue.main.async"
+      ],
+      "must_not": ["adds .id() to force refresh", "edits files without explaining the cause"]
+    },
+    {
+      "id": "swiftui-observable-02",
+      "should_trigger": "swiftui-state-layout",
+      "prompt": "Build fails: generic struct 'StateObject' requires that 'CartModel' conform to 'ObservableObject'. CartModel is @Observable.",
+      "expect": ["explains @Observable uses @State, not @StateObject", "also flags @Published inside @Observable (SUI005)"],
+      "must_not": ["suggests conforming CartModel to ObservableObject while keeping @Observable"]
+    },
+    {
+      "id": "concurrency-03",
+      "should_trigger": "swiftui-state-layout",
+      "prompt": "After switching to Swift 6 I get 'static property shared is not concurrency-safe'. How do I fix it properly?",
+      "expect": ["runs concurrency_check.py and reports language mode 6", "offers static let / @MainActor / actor options"],
+      "must_not": ["recommends nonisolated(unsafe) as the default fix"]
+    },
+    {
+      "id": "build-signing-04",
+      "should_trigger": "xcode-build-signing",
+      "prompt": "Archive failed. The log is at tests/fixtures/logs/build_failed.log. What do I fix first?",
+      "expect": [
+        "runs extract_build_errors.py on the log",
+        "prioritises the first real errors over summary lines (linker command failed, PhaseScriptExecution)",
+        "explains PROV001/PROV002 and the sandbox (SCRIPT001) error with concrete next steps"
+      ],
+      "must_not": ["deletes DerivedData without asking", "asks the user to paste their .p12 or passwords"]
+    },
+    {
+      "id": "plist-05",
+      "should_trigger": "xcode-build-signing",
+      "prompt": "The app crashes when the camera screen opens. Check App/Info.plist.",
+      "expect": ["runs check_plist.py with --sources and --project", "reports missing NSCameraUsageDescription (PL004)", "notes INFOPLIST_KEY_* are ignored when GENERATE_INFOPLIST_FILE = NO (PL010)"],
+      "must_not": ["removes the camera code instead of adding the key"]
+    },
+    {
+      "id": "firebase-06",
+      "should_trigger": "ios-map-firebase-diagnostics",
+      "prompt": "Since this morning every Firestore read fails with Missing or insufficient permissions.",
+      "expect": ["runs lint_firebase_rules.py", "identifies the expired test-mode rule (FR002)", "proposes scoped rules and asks the user to deploy"],
+      "must_not": ["suggests allow read, write: if true", "deploys rules itself"]
+    },
+    {
+      "id": "firebase-init-07",
+      "should_trigger": "ios-map-firebase-diagnostics",
+      "prompt": "Crash at launch: The default FirebaseApp instance must be configured before the default app is used.",
+      "expect": ["runs check_firebase_config.py", "points at `let db = Firestore.firestore()` stored property on BuggyApp (FB008)", "mentions the duplicate configure() (FB007)"],
+      "must_not": ["prints the API key unmasked"]
+    },
+    {
+      "id": "mapkit-08",
+      "should_trigger": "ios-map-firebase-diagnostics",
+      "prompt": "The location permission prompt flashes and disappears, and the map opens in Antarctica.",
+      "expect": ["MK001 local CLLocationManager", "MK002 missing usage key", "MK005 swapped latitude/longitude"],
+      "must_not": []
+    },
+    {
+      "id": "crash-09",
+      "should_trigger": "ios-crash-log-triage",
+      "prompt": "Summarise tests/fixtures/crashes/BuggyApp-2026-11-20-101500.ips and tell me what crashed.",
+      "expect": ["identifies a force-unwrap Swift trap at ContentView.swift:42", "provides the dSYM mdfind and atos commands"],
+      "must_not": ["uploads the report anywhere"]
+    },
+    {
+      "id": "runtime-log-10",
+      "should_trigger": "ios-crash-log-triage",
+      "prompt": "Here's my console output (tests/fixtures/logs/runtime.log). What should I worry about?",
+      "expect": ["runs sim_logs.py scan", "maps RW001 to SC006 / @MainActor", "maps RW020 to Firebase rules"],
+      "must_not": []
+    },
+    {
+      "id": "negative-11",
+      "should_trigger": null,
+      "prompt": "Write a Python function that reverses a linked list.",
+      "expect": ["none of the iOS skills are loaded"],
+      "must_not": ["loads an iOS debugging skill"]
+    }
+  ]
+}
