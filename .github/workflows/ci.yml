@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Helper copies in sync
+        run: python tools/sync_common.py --check
+      - name: Validate skills (Agent Skills format)
+        run: python tools/validate_skills.py
+      - name: Unit + MCP end-to-end tests
+        run: python -m unittest discover -s tests -v
+      - name: Installer smoke test
+        run: |
+          ./install.sh --dest "$RUNNER_TEMP/skills"
+          test -f "$RUNNER_TEMP/skills/swiftui-state-layout/SKILL.md"
+      - name: MCP server starts (macOS tools may be unavailable on Linux)
+        run: python mcp-server/server.py --call xcode_environment
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck install.sh skills/*/assets/*.sh

@@ -1,0 +1,22 @@
+rules_version = '2';
+
+// Secure baseline for Cloud Storage. Copy to storage.rules, adapt, test, then deploy:
+//   firebase deploy --only storage
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Per-user uploads: users/{uid}/...
+    match /users/{uid}/{allPaths=**} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null && request.auth.uid == uid
+                   && request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
+    // Public read-only assets uploaded by your backend.
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

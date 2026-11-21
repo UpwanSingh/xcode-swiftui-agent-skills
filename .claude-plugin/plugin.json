@@ -1,0 +1,16 @@
+{
+  "name": "ios-debug-pack",
+  "version": "1.0.0",
+  "description": "SwiftUI state/layout, Xcode build & signing, MapKit/Firebase and crash-log debugging skills plus a read-only MCP server for Xcode diagnostics.",
+  "author": { "name": "UpwanSingh", "url": "https://github.com/UpwanSingh" },
+  "homepage": "https://github.com/UpwanSingh/xcode-swiftui-agent-skills",
+  "repository": "https://github.com/UpwanSingh/xcode-swiftui-agent-skills",
+  "license": "MIT",
+  "keywords": ["ios", "swiftui", "xcode", "signing", "mapkit", "firebase", "crash", "mcp", "debugging"],
+  "mcpServers": {
+    "ios-debug": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/server.py"]
+    }
+  }
+}

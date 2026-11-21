@@ -1,0 +1,30 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -scheme BuggyApp -destination generic/platform=iOS archive
+
+Resolve Package Graph
+
+CompileSwift normal arm64 /Users/dev/BuggyApp/App/Services.swift (in target 'BuggyApp' from project 'BuggyApp')
+/Users/dev/BuggyApp/App/Services.swift:10:16: error: static property 'shared' is not concurrency-safe because it is nonisolated global shared mutable state
+    static var shared: [String: Data] = [:]
+               ^
+/Users/dev/BuggyApp/App/Services.swift:10:16: error: static property 'shared' is not concurrency-safe because it is nonisolated global shared mutable state
+/Users/dev/BuggyApp/App/ContentView.swift:16:6: error: generic struct 'StateObject' requires that 'CartModel' conform to 'ObservableObject'
+/Users/dev/BuggyApp/App/ContentView.swift:40:9: warning: variable 'x' was never used; consider replacing with '_' or removing it
+/Users/dev/My App/Sources/Feed.swift:12:5: error: no such module 'FirebaseFirestore'
+error: No profiles for 'com.example.buggy' were found: Xcode couldn't find any iOS App Development provisioning profiles matching 'com.example.buggy'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'BuggyApp' from project 'BuggyApp')
+error: Provisioning profile "BuggyApp Dev" doesn't include signing certificate "Apple Development: Jane Dev (XYZ9876543)". (in target 'BuggyApp' from project 'BuggyApp')
+Sandbox: rsync(12345) deny(1) file-write-create /Users/dev/Library/Developer/Xcode/DerivedData/BuggyApp-abc/Build/Products/Release-iphoneos/BuggyApp.app/Frameworks/Lib.framework
+Command PhaseScriptExecution failed with a nonzero exit code
+Undefined symbols for architecture arm64:
+  "_OBJC_CLASS_$_GADMobileAds", referenced from:
+       in AppDelegate.o
+ld: symbol(s) not found for architecture arm64
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+error: Multiple commands produce '/Users/dev/Library/Developer/Xcode/DerivedData/BuggyApp-abc/Build/Products/Debug-iphonesimulator/BuggyApp.app/Info.plist'
+
+** ARCHIVE FAILED **
+
+The following build commands failed:
+	CompileSwift normal arm64 /Users/dev/BuggyApp/App/Services.swift (in target 'BuggyApp' from project 'BuggyApp')
+	PhaseScriptExecution [CP]\ Embed\ Pods\ Frameworks /Users/dev/Library/Developer/Xcode/DerivedData/BuggyApp-abc/Build/Intermediates.noindex/BuggyApp.build/Script-ABC.sh (in target 'BuggyApp' from project 'BuggyApp')
+(2 failures)

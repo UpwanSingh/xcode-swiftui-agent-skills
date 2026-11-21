@@ -1,0 +1,28 @@
+{"app_name":"BuggyApp","timestamp":"2026-11-20 10:15:00.00 +0530","app_version":"1.2.0","slice_uuid":"11111111-2222-3333-4444-555555555555","build_version":"7","platform":2,"bundleID":"com.example.buggy","share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"iPhone OS 18.1 (22B83)","incident_id":"ABCDEF01-2345-6789-ABCD-EF0123456789","name":"BuggyApp"}
+{
+  "uptime" : 1000,
+  "procName" : "BuggyApp",
+  "modelCode" : "iPhone16,1",
+  "incident" : "ABCDEF01-2345-6789-ABCD-EF0123456789",
+  "bundleInfo" : {"CFBundleShortVersionString":"1.2.0","CFBundleVersion":"7","CFBundleIdentifier":"com.example.buggy"},
+  "osVersion" : {"train":"iPhone OS 18.1","build":"22B83","releaseType":"User"},
+  "exception" : {"codes":"0x0000000000000001, 0x00000001a2b3c4d5","rawCodes":[1,7023936725],"type":"EXC_BREAKPOINT","signal":"SIGTRAP"},
+  "termination" : {"flags":0,"code":5,"namespace":"SIGNAL","indicator":"Trace/BPT trap: 5","byProc":"exc handler","byPid":123},
+  "asi" : {"libswiftCore.dylib":["BuggyApp/ContentView.swift:42: Fatal error: Unexpectedly found nil while unwrapping an Optional value"]},
+  "faultingThread" : 0,
+  "threads" : [
+    {"triggered":true,"id":1,"queue":"com.apple.main-thread","frames":[
+      {"imageOffset":123456,"symbol":"_assertionFailure(_:_:file:line:flags:)","symbolLocation":200,"imageIndex":1},
+      {"imageOffset":40960,"imageIndex":0},
+      {"imageOffset":41200,"imageIndex":0},
+      {"imageOffset":9000,"symbol":"UIApplicationMain","symbolLocation":100,"imageIndex":2}
+    ]},
+    {"id":2,"frames":[{"imageOffset":100,"symbol":"__workq_kernreturn","imageIndex":3}]}
+  ],
+  "usedImages" : [
+    {"source":"P","arch":"arm64","base":4294967296,"size":100000,"uuid":"11111111-2222-3333-4444-555555555555","path":"/private/var/containers/Bundle/Application/X/BuggyApp.app/BuggyApp","name":"BuggyApp"},
+    {"source":"P","arch":"arm64e","base":6000000000,"size":200000,"uuid":"22222222-2222-3333-4444-555555555555","path":"/usr/lib/swift/libswiftCore.dylib","name":"libswiftCore.dylib"},
+    {"source":"P","arch":"arm64e","base":7000000000,"size":300000,"uuid":"33333333-2222-3333-4444-555555555555","path":"/System/Library/PrivateFrameworks/UIKitCore.framework/UIKitCore","name":"UIKitCore"},
+    {"source":"P","arch":"arm64e","base":8000000000,"size":300000,"uuid":"44444444-2222-3333-4444-555555555555","path":"/usr/lib/system/libsystem_kernel.dylib","name":"libsystem_kernel.dylib"}
+  ]
+}

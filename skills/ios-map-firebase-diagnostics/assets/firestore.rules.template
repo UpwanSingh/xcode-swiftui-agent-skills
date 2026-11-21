@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// Secure baseline for Cloud Firestore. Copy to firestore.rules, adapt the collections,
+// test in the emulator / Rules Playground, then deploy:  firebase deploy --only firestore:rules
+// Default: everything not matched below is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Private per-user documents: /users/{uid}
+    match /users/{uid} {
+      allow read, update, delete: if isOwner(uid);
+      allow create: if isOwner(uid);
+
+      // Sub-collections inherit nothing; give each its own rule.
+      match /private/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Shared content with an owner field: /posts/{postId}
+    match /posts/{postId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.authorId == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.authorId == request.auth.uid;
+    }
+
+    // Collection-group queries on "comments" anywhere in the tree.
+    match /{path=**}/comments/{commentId} {
+      allow read: if signedIn();
+    }
+  }
+}

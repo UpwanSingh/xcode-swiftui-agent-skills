@@ -1,0 +1,58 @@
+macro expansion @ObservationTracked:3:14: error: invalid redeclaration of synthesized property '_total'
+`- Bugs.swift:5:58: note: expanded code originates here
+ 3 | 
+ 4 | @Observable final class CartModel { var items: [String] = [] }
+ 5 | @Observable final class Broken { @Published var total = 0 }
+   |                                                 `- note: '_total' synthesized for property wrapper backing storage
+   +--- macro expansion @ObservationTracked ----------------------------
+   |1 | @Published
+   |2 | @ObservationIgnored
+   |3 | private  var _total  = 0
+   |  |              `- error: invalid redeclaration of synthesized property '_total'
+   +--------------------------------------------------------------------
+ 6 | 
+ 7 | enum Cache { static var shared: [String: Int] = [:] }
+
+Bugs.swift:7:25: error: static property 'shared' is not concurrency-safe because it is nonisolated global shared mutable state [#MutableGlobalVariable]
+ 5 | @Observable final class Broken { @Published var total = 0 }
+ 6 | 
+ 7 | enum Cache { static var shared: [String: Int] = [:] }
+   |                         |- error: static property 'shared' is not concurrency-safe because it is nonisolated global shared mutable state [#MutableGlobalVariable]
+   |                         |- note: convert 'shared' to a 'let' constant to make 'Sendable' shared state immutable
+   |                         |- note: add '@MainActor' to make static property 'shared' part of global actor 'MainActor'
+   |                         `- note: disable concurrency-safety checks if accesses are protected by an external synchronization mechanism
+ 8 | 
+ 9 | struct RootView: View {
+
+Bugs.swift:10:6: error: generic struct 'StateObject' requires that 'CartModel' conform to 'ObservableObject'
+ 8 | 
+ 9 | struct RootView: View {
+10 |     @StateObject private var cart = CartModel()
+   |      `- error: generic struct 'StateObject' requires that 'CartModel' conform to 'ObservableObject'
+11 |     var body: some View { Text("x") }
+12 | }
+
+SwiftUI.StateObject:2:67: note: where 'ObjectType' = 'CartModel'
+1 | @available(iOS 14.0, macOS 11.0, tvOS 14.0, watchOS 7.0, *)
+2 | @MainActor @frozen @propertyWrapper @preconcurrency public struct StateObject<ObjectType> : DynamicProperty where ObjectType : ObservableObject {
+  |                                                                   `- note: where 'ObjectType' = 'CartModel'
+3 |     @inlinable nonisolated public init(wrappedValue thunk: @autoclosure @escaping () -> ObjectType)
+4 |     @MainActor @preconcurrency public var wrappedValue: ObjectType { get }
+
+<unknown>:0: error: cannot convert value of type 'ReferenceWritableKeyPath<Broken, Published<Int>>' to expected argument type 'ReferenceWritableKeyPath<Broken, Int>'
+<unknown>:0: note: arguments to generic parameter 'Value' ('Published<Int>' and 'Int') are expected to be equal
+<unknown>:0: error: cannot convert value of type 'ReferenceWritableKeyPath<Broken, Published<Int>>' to expected argument type 'ReferenceWritableKeyPath<Broken, Int>'
+<unknown>:0: note: arguments to generic parameter 'Value' ('Published<Int>' and 'Int') are expected to be equal
+<unknown>:0: error: cannot convert value of type 'ReferenceWritableKeyPath<Broken, Published<Int>>' to expected argument type 'ReferenceWritableKeyPath<Broken, Int>'
+<unknown>:0: note: arguments to generic parameter 'Value' ('Published<Int>' and 'Int') are expected to be equal
+Bugs.swift:15:27: error: main actor-isolated property 'count' can not be mutated from a nonisolated context
+12 | }
+13 | 
+14 | @MainActor final class Store { var count = 0 }
+   |                                    `- note: mutation of this property is only permitted within the actor
+15 | func bump(_ s: Store) { s.count += 1 }
+   |      |                    `- error: main actor-isolated property 'count' can not be mutated from a nonisolated context
+   |      `- note: add '@MainActor' to make global function 'bump' part of global actor 'MainActor'
+16 | 
+
+[#MutableGlobalVariable]: <https://docs.swift.org/compiler/documentation/diagnostics/mutable-global-variable>
