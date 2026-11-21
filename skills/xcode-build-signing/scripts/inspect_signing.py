@@ -8,6 +8,7 @@ Subcommands:
   compare --entitlements F  check every entitlement the app requests is granted by a profile
           (--profile P | --app App.app) [--bundle-id ID]
   identities                list code-signing identities in the keychain (names + SHA-1 only)
+  rules                     print the SIG rule ids
 
 Private keys and certificate bodies are never printed. Nothing is installed, deleted or re-signed.
 
@@ -30,6 +31,16 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common as c  # noqa: E402
+
+RULES = {
+    "SIG001": ("error", "Provisioning profile expired (warning when it expires within 14 days)"),
+    "SIG002": ("warning", "A certificate inside the profile has expired"),
+    "SIG003": ("error", "No valid keychain identity matches any certificate in the profile"),
+    "SIG004": ("error", "Bundle id does not match the profile's App ID"),
+    "SIG005": ("error", "get-task-allow requested with a distribution profile"),
+    "SIG006": ("error", "Entitlement requested but not granted by the profile (capability missing)"),
+    "SIG007": ("error", "Entitlement value not allowed by the profile"),
+}
 
 PROFILE_DIRS = [
     "~/Library/Developer/Xcode/UserData/Provisioning Profiles",  # Xcode 16+
@@ -137,14 +148,14 @@ def inspect_profile(path: str, check_keychain: bool = False) -> Dict[str, Any]:
         findings.append(c.Finding("SIG001", "warning", f"profile expires in {info['days_left']} day(s)", path))
     for cert in info["certificates"]:
         if cert.get("expired"):
-            findings.append(c.Finding("SIG002", "warning", f"certificate {cert.get('subject_cn', cert['sha1'])} in "
+            findings.append(c.Finding("SIG002", RULES["SIG002"][0], f"certificate {cert.get('subject_cn', cert['sha1'])} in "
                                       "this profile has expired", path))
     if check_keychain:
         local = {i["sha1"]: i for i in list_identities()}
         usable = [cert for cert in info["certificates"] if local.get(cert["sha1"], {}).get("status") == "valid"]
         info["keychain_matches"] = [local[cert["sha1"]] for cert in info["certificates"] if cert["sha1"] in local]
         if not usable:
-            findings.append(c.Finding("SIG003", "error", "none of the profile's certificates has a valid identity "
+            findings.append(c.Finding("SIG003", RULES["SIG003"][0], "none of the profile's certificates has a valid identity "
                                       "(certificate + private key) in this keychain", path,
                                       fix="Install the matching .p12, or regenerate the profile to include a "
                                           "certificate you hold (Xcode error: \"doesn't include signing certificate\")."))
@@ -194,7 +205,11 @@ def _granted(requested: Any, granted: Any) -> bool:
         return (not requested) or granted is True
     if isinstance(requested, str):
         options = granted if isinstance(granted, list) else [granted]
-        return any(isinstance(g, str) and (fnmatch.fnmatchcase(requested, g) or g == "*") for g in options)
+        # A requested value with an unexpanded $(VAR) became "*" in _substitute; match it as a
+        # pattern against the granted values too (iCloud.$(CFBundleIdentifier) vs iCloud.com.acme.app).
+        return any(isinstance(g, str) and (g == "*" or fnmatch.fnmatchcase(requested, g)
+                                           or ("*" in requested and fnmatch.fnmatchcase(g, requested)))
+                   for g in options)
     if isinstance(requested, list):
         return all(_granted(r, granted) for r in requested)
     return requested == granted
@@ -230,7 +245,7 @@ def compare(entitlements: str, profile: Optional[str] = None, app: Optional[str]
     if prof["expired"]:
         findings.append(c.Finding("SIG001", "error", f"profile {prof['name']} expired on {prof['expires']}", profile))
     if bundle_id and not bundle_matches(prof["bundle_id_pattern"], bundle_id):
-        findings.append(c.Finding("SIG004", "error", f"bundle id {bundle_id} does not match the profile's App ID "
+        findings.append(c.Finding("SIG004", RULES["SIG004"][0], f"bundle id {bundle_id} does not match the profile's App ID "
                                   f"{prof['application_identifier']}", profile,
                                   fix="Use a profile created for this bundle id (or a matching wildcard)."))
     for key, value in requested.items():
@@ -238,12 +253,12 @@ def compare(entitlements: str, profile: Optional[str] = None, app: Optional[str]
         capability = CAPABILITY.get(key, key)
         if key == "get-task-allow":
             if value is True and prof["type"] in ("app-store", "ad-hoc", "enterprise"):
-                findings.append(c.Finding("SIG005", "error", f"get-task-allow = true with a {prof['type']} profile",
+                findings.append(c.Finding("SIG005", RULES["SIG005"][0], f"get-task-allow = true with a {prof['type']} profile",
                                           source, fix="Remove get-task-allow from the entitlements file; Xcode adds "
                                                       "it for development signing only."))
             continue
         if key not in granted:
-            findings.append(c.Finding("SIG006", "error", f"{key} ({capability}) is requested but the profile does "
+            findings.append(c.Finding("SIG006", RULES["SIG006"][0], f"{key} ({capability}) is requested but the profile does "
                                       "not grant it", source,
                                       fix=f"Enable {capability} for the App ID and regenerate the profile, or remove "
                                           "the entitlement."))
@@ -252,7 +267,7 @@ def compare(entitlements: str, profile: Optional[str] = None, app: Optional[str]
             if key == "aps-environment":
                 hint = ("Xcode rewrites aps-environment for the profile type; a mismatch usually means manual "
                         "signing with the wrong (development vs distribution) profile.")
-            findings.append(c.Finding("SIG007", "error", f"{key}: requested {value!r} but profile grants "
+            findings.append(c.Finding("SIG007", RULES["SIG007"][0], f"{key}: requested {value!r} but profile grants "
                                       f"{granted[key]!r}", source, fix=hint or "Align the entitlements file with "
                                       "the identifiers registered for the App ID, then regenerate the profile."))
     prof.pop("devices", None)
@@ -291,10 +306,14 @@ def main(argv=None) -> int:
     sc.add_argument("--app", help="built .app bundle (uses its embedded.mobileprovision)")
     sc.add_argument("--bundle-id")
     sub.add_parser("identities", help="list code-signing identities in the keychain")
+    sub.add_parser("rules", help="print rule ids and exit")
     for s in (sp, sl, sc):
         s.add_argument("--json", action="store_true", help="print machine-readable JSON")
     args = p.parse_args(argv)
 
+    if args.cmd == "rules":
+        c.print_rules(RULES)
+        return 0
     if args.cmd == "identities":
         ids = list_identities()
         for i in ids:

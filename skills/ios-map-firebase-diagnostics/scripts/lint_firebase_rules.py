@@ -155,8 +155,7 @@ def analyze(paths: Optional[Sequence[str]] = None, root: Optional[str] = None,
     if not files:
         if not root:
             raise c.UsageError("pass rules files or --root")
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in c.SKIP_DIRS and not d.startswith(".")]
+        for dirpath, _, filenames in c.walk(root):
             files += [os.path.join(dirpath, f) for f in filenames if f.endswith(".rules")]
         if not files:
             raise c.UsageError(f"no *.rules files under {root}")

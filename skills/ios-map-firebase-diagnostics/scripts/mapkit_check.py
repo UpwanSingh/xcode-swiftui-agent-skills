@@ -53,17 +53,44 @@ def _keys_from(plist: Optional[str], project: Optional[str]) -> tuple:
         known = True
     if project:
         settings = c.read_build_settings(project)
-        if "YES" not in c.setting_values(settings, "GENERATE_INFOPLIST_FILE"):
-            settings = {}  # INFOPLIST_KEY_* only apply to generated Info.plists
-        for k, vals in settings.items():
-            if k.startswith("INFOPLIST_KEY_"):
-                key = k[len("INFOPLIST_KEY_"):].split("[", 1)[0]
-                keys.add(key)
-                if key == "UIBackgroundModes":
-                    for v in vals:
-                        modes |= set(v.split())
-        known = True
+        if "YES" in c.setting_values(settings, "GENERATE_INFOPLIST_FILE"):
+            for k, vals in settings.items():
+                if k.startswith("INFOPLIST_KEY_"):
+                    key = k[len("INFOPLIST_KEY_"):].split("[", 1)[0]
+                    keys.add(key)
+                    if key == "UIBackgroundModes":
+                        for v in vals:
+                            modes |= set(v.split())
+            known = True
+        elif not plist:
+            # INFOPLIST_KEY_* are ignored without generation; read the target's own Info.plist instead.
+            base = c.project_dir(project)
+            for value in c.setting_values(settings, "INFOPLIST_FILE"):
+                candidate = os.path.join(base, re.sub(r"^\$[({]SRCROOT[)}]/", "", value))
+                if "$(" not in candidate and os.path.isfile(candidate):
+                    data = c.load_plist(candidate)
+                    keys |= set(data)
+                    modes |= set(data.get("UIBackgroundModes", []) or [])
+                    known = True
     return keys, modes, known
+
+
+TYPE_DECL = re.compile(r"\b(class|struct|actor|extension|enum)\b")
+
+
+def _is_property_initializer(sf: c.SourceFile, enc: int, header: str, name: str) -> bool:
+    """True when the manager lives in a closure that initialises a stored/lazy property, or the
+    closure hands the manager back to its caller, so it is retained after the closure returns."""
+    if enc < 0:
+        return False
+    close = sf.match_close(enc)
+    body = sf.code[enc:close] if close > 0 else ""
+    if re.search(r"\breturn\s+" + re.escape(name) + r"\b", body):
+        return True
+    if re.search(r"=\s*$", header):
+        outer = sf.enclosing_open(enc)
+        return outer >= 0 and bool(TYPE_DECL.search(sf.header_before(outer)))
+    return False
 
 
 def analyze(paths: Sequence[str], plist: Optional[str] = None, project: Optional[str] = None) -> dict:
@@ -81,6 +108,8 @@ def analyze(paths: Sequence[str], plist: Optional[str] = None, project: Optional
         for m in LOCAL_MANAGER.finditer(code):
             enc = sf.enclosing_open(m.start())
             header = sf.header_before(enc) if enc >= 0 else ""
+            if _is_property_initializer(sf, enc, header, m.group(1)):
+                continue  # lazy var manager = { let m = CLLocationManager(); ...; return m }()
             if re.search(r"\bfunc\b|\binit\s*\(|\bin$|\bdo$|\bTask\b|\bonAppear\b|\btask\b|=\s*$", header) \
                     and not re.search(r"\b(class|struct|actor|extension|enum)\b", header):
                 add("MK001", sf, m.start(), f"`{m.group(1)}` = CLLocationManager() is a local; it is released when "

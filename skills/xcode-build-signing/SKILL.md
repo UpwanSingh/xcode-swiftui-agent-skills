@@ -30,6 +30,11 @@ python3 scripts/check_bundle_resources.py --sources App --app path/to/App.app
 python3 scripts/xcode_env.py env | projects | schemes P | settings P --scheme S | logs --project App
 ```
 
+Through the `ios-debug` MCP server, the same checks are `extract_build_errors`, `check_info_plist`,
+`inspect_provisioning_profile`, `list_provisioning_profiles`, `compare_entitlements`, `list_signing_identities`,
+`check_bundle_resources`, `xcode_environment`, `find_xcode_projects`, `list_schemes`, `show_build_settings`
+and `find_build_logs`.
+
 Exit status: `0` OK, `1` errors found, `2` bad input or missing tool. Every finding has a rule id
 and a `fix:` line.
 
@@ -39,7 +44,8 @@ and a `fix:` line.
    ```bash
    xcodebuild -scheme App -destination 'generic/platform=iOS Simulator' build 2>&1 | tee build.log
    ```
-   Or reuse Xcode's last log: `scripts/xcode_env.py logs --project App`, then pass the `.xcactivitylog`.
+   Or reuse Xcode's last build log: `scripts/xcode_env.py logs --project App` (Build logs by default;
+   `--kind Test` for test runs), then pass the `.xcactivitylog`.
 2. **Extract.** `scripts/extract_build_errors.py build.log`. Read the status line, the categories and the
    **first** error. `Failed commands` tells you which target and phase failed.
 3. **Use the category to choose the next step:**

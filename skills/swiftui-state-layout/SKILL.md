@@ -37,7 +37,8 @@ python3 scripts/concurrency_check.py Sources/ --settings App.xcodeproj   # SC001
 ```
 
 Exit status: `0` clean, `1` findings at or above `--fail-on` (default `error`), `2` bad input.
-Treat findings as leads: confirm each one in the code before you change it.
+Treat findings as leads: confirm each one in the code before you change it. Through the `ios-debug`
+MCP server the same checks are the `swiftui_lint` and `swift_concurrency_check` tools.
 
 ## Workflow 1: re-render loops and lost state
 

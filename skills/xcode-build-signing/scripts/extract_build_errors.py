@@ -16,16 +16,21 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import zlib
 import os
 import re
 import sys
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _common as c  # noqa: E402
 
 # (id, category, regex, hint). First match wins, so keep specific patterns above generic ones.
 CATALOG = [
+    # Export errors also mention certificates/profiles; match them before the generic signing rules.
+    ("EXPORT001", "export", r"exportArchive|error: exportArchive|IDEDistribution",
+     "Export options do not match the archive (method/team/profile). Check ExportOptions.plist "
+     "(method: app-store-connect / release-testing / debugging / enterprise) and signingStyle."),
     ("SIGN001", "signing", r"Signing for \".+\" requires a development team",
      "Set DEVELOPMENT_TEAM for the target (Signing & Capabilities > Team) or pass DEVELOPMENT_TEAM=XXXXXXXXXX."),
     ("SIGN002", "signing", r"No (?:signing certificate|certificate) \"?[^\"]*\"? (?:found|for team)|"
@@ -138,9 +143,6 @@ CATALOG = [
      r"(?:StateObject|ObservedObject|EnvironmentObject).* requires .* ObservableObject",
      "An @Observable class is used with @StateObject/@ObservedObject/@EnvironmentObject. Use @State, a plain "
      "property/@Bindable, or @Environment(Type.self) (swiftui_lint.py rule SUI004)."),
-    ("EXPORT001", "export", r"exportArchive|error: exportArchive|IDEDistribution",
-     "Export options do not match the archive (method/team/profile). Check ExportOptions.plist "
-     "(method: app-store-connect / release-testing / debugging / enterprise) and signingStyle."),
 ]
 _CATALOG = [(i, cat, re.compile(rx, re.I), hint) for i, cat, rx, hint in CATALOG]
 
@@ -158,21 +160,35 @@ STATUS = re.compile(r"\*\* ((?:BUILD|ARCHIVE|TEST|EXPORT|ANALYZE|CLEAN) (?:SUCCE
 FAILED_HEADER = "The following build commands failed:"
 
 
-def read_log(path: str) -> str:
+MAX_LINE = 4000          # diagnostics are short; clipping keeps every regex linear on pathological lines
+READ_CHUNK = 1024 * 1024  # bound memory when a "line" has no newline (SLF blobs, minified output)
+
+
+def iter_log_lines(path: str, state: Dict[str, Any]) -> Iterator[str]:
+    """Stream a log without a size cap. Gzip .xcactivitylog files are decompressed on the fly
+    (universal newlines turn SLF's \r separators into lines). A truncated/corrupt gzip ends the
+    stream early and sets state['input_truncated'] instead of raising, so the part that was
+    readable is still parsed and the caller can see the result is incomplete."""
     if path == "-":
-        return sys.stdin.read()
+        yield from sys.stdin
+        return
     if not os.path.isfile(path):
         raise c.UsageError(f"no such log file: {path}")
+    c.require_allowed(path)
     with open(path, "rb") as fh:
-        head = fh.read(2)
-    if head == b"\x1f\x8b":  # .xcactivitylog is gzip-compressed SLF; text survives decompression
-        try:
-            with gzip.open(path, "rb") as fh:
-                data = fh.read(64 * 1024 * 1024)
-        except OSError as exc:
-            raise c.UsageError(f"cannot decompress {path}: {exc}") from exc
-        return data.decode("utf-8", "replace").replace("\r", "\n")
-    return c.read_text(path)
+        gz = fh.read(2) == b"\x1f\x8b"
+    try:
+        opener = gzip.open(path, "rt", encoding="utf-8", errors="replace", newline=None) if gz else \
+            open(path, "r", encoding="utf-8", errors="replace", newline=None)
+        with opener as fh:
+            while True:
+                line = fh.readline(READ_CHUNK)
+                if not line:
+                    break
+                yield line
+    except (EOFError, zlib.error, OSError) as exc:
+        state["input_truncated"] = True
+        state["input_note"] = f"log ended early ({type(exc).__name__}: {exc}); results cover only the readable part"
 
 
 def classify(message: str) -> Optional[Dict[str, str]]:
@@ -182,14 +198,16 @@ def classify(message: str) -> Optional[Dict[str, str]]:
     return None
 
 
-def parse(text: str, include_warnings: bool = False, max_items: int = 50) -> dict:
+def parse(text: Union[str, Iterable[str]], include_warnings: bool = False, max_items: int = 50,
+          state: Optional[Dict[str, Any]] = None) -> dict:
     items: Dict[tuple, dict] = {}
     failed_cmds: List[str] = []
     status = None
     warnings = 0
     in_failed = False
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        line = ANSI.sub("", raw).rstrip()
+    lines = text.splitlines() if isinstance(text, str) else text
+    for lineno, raw in enumerate(lines, 1):
+        line = ANSI.sub("", raw[:MAX_LINE]).rstrip()
         sm = STATUS.search(line)
         if sm:
             status = sm.group(1)
@@ -249,8 +267,14 @@ def parse(text: str, include_warnings: bool = False, max_items: int = 50) -> dic
     categories: Dict[str, int] = {}
     for e in errors:
         categories[e.get("category", "other")] = categories.get(e.get("category", "other"), 0) + 1
+    state = state or {}
     if status is None:
-        status = "FAILED (no status line)" if errors else "UNKNOWN (no status line found)"
+        if errors:
+            status = "FAILED (no status line)"
+        elif state.get("input_truncated"):
+            status = "UNKNOWN (log ended early; do not treat this as a clean build)"
+        else:
+            status = "UNKNOWN (no status line found)"
     return {
         "status": status,
         "error_count": len(errors),
@@ -260,25 +284,30 @@ def parse(text: str, include_warnings: bool = False, max_items: int = 50) -> dic
         "warnings": shown_warnings[:max_items] if include_warnings else [],
         "failed_commands": failed_cmds,
         "truncated": len(errors) > max_items,
+        "input_truncated": bool(state.get("input_truncated")),
+        "input_note": state.get("input_note"),
     }
 
 
 def analyze(path: Optional[str] = None, text: Optional[str] = None, include_warnings: bool = False,
             max_items: int = 50) -> dict:
+    state: Dict[str, Any] = {}
     if text is None:
         if not path:
             raise c.UsageError("pass a log path or text")
-        text = read_log(path)
-    result = parse(text, include_warnings, max_items)
+        text = iter_log_lines(path, state)
+    result = parse(text, include_warnings, max_items, state)
     if path:
         result["source"] = path
     return result
 
 
 def format_text(result: dict) -> str:
-    out = [f"Build status: {result['status']}",
-           f"Errors: {result['error_count']} unique   Warnings: {result['warning_count']}"
-           + ("" if result["warnings"] else " (hidden; use --warnings)")]
+    out = [f"Build status: {result['status']}"]
+    if result.get("input_truncated"):
+        out.append(f"WARNING: {result['input_note']}")
+    out.append(f"Errors: {result['error_count']} unique   Warnings: {result['warning_count']}"
+               + ("" if result["warnings"] else " (hidden; use --warnings)"))
     if result["categories"]:
         out.append("Categories: " + ", ".join(f"{k}={v}" for k, v in sorted(result["categories"].items())))
     for e in result["errors"] + result["warnings"]:

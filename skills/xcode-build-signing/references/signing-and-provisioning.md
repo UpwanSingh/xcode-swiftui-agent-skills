@@ -88,6 +88,8 @@ configuration**. Release is often set up differently from Debug.
 
 ## 6. Checks
 
+`inspect_signing.py rules` prints this table.
+
 | Rule | Severity | Meaning |
 |---|---|---|
 | SIG001 | error/warning | Profile expired, or expires within 14 days |

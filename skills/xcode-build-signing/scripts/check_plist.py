@@ -116,6 +116,12 @@ def analyze(plist: Optional[str] = None, sources: Optional[Sequence[str]] = None
             return c.make_result([c.Finding("PL001", "error", "top-level object is not a dictionary", plist)])
 
     settings: Dict[str, List[str]] = c.read_build_settings(project) if project else {}
+    if project:
+        # Settings often live in .xcconfig files (baseConfigurationReference); without them every
+        # $(MARKETING_VERSION)-style reference would look undefined.
+        for key, values in c.read_xcconfig_settings(c.project_dir(project)).items():
+            bucket = settings.setdefault(key, [])
+            bucket.extend(v for v in values if v not in bucket)
     generated = "YES" in c.setting_values(settings, "GENERATE_INFOPLIST_FILE")
     infoplist_keys: Set[str] = set()
     for k in settings:

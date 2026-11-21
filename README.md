@@ -87,7 +87,7 @@ OS. Live tools (`xcodebuild`, `simctl`, `devicectl`, `codesign`, keychain) need 
 ```bash
 git clone https://github.com/UpwanSingh/xcode-swiftui-agent-skills.git
 cd xcode-swiftui-agent-skills
-python3 -m unittest discover -s tests      # 58 tests, ~2 s: confirms everything works on your machine
+python3 -m unittest discover -s tests      # 99 tests, ~5 s: confirms everything works on your machine
 ```
 
 ### 1. Install the skills
@@ -157,7 +157,7 @@ python3 skills/ios-crash-log-triage/scripts/crash_report.py list --app MyApp
 | Skill | Scripts | Rules |
 |---|---|---|
 | swiftui-state-layout | `swiftui_lint.py`, `concurrency_check.py` | SUI001–013, SC001–010 |
-| xcode-build-signing | `extract_build_errors.py`, `check_plist.py`, `inspect_signing.py`, `check_bundle_resources.py`, `xcode_env.py` | 37 build patterns, PL001–010, SIG001–007, BR001–007 |
+| xcode-build-signing | `extract_build_errors.py`, `check_plist.py`, `inspect_signing.py`, `check_bundle_resources.py`, `xcode_env.py` | 38 build patterns, PL001–010, SIG001–007, BR001–007 |
 | ios-map-firebase-diagnostics | `mapkit_check.py`, `check_firebase_config.py`, `lint_firebase_rules.py` | MK001–011, FB001–012, FR001–008 |
 | ios-crash-log-triage | `crash_report.py`, `sim_logs.py` | 18 crash diagnoses, RW001–025 |
 
@@ -194,16 +194,19 @@ python3 skills/ios-crash-log-triage/scripts/crash_report.py list --app MyApp
 
 ## Safety and guardrails
 
-- **Read-only by construction.** External commands go through one allow-list
-  (`simctl list`, `simctl spawn … log show`, `devicectl list devices`, `xcodebuild -list/-showBuildSettings/-version`,
-  `codesign -d`, `security find-identity`, …). Anything else is refused, even when called from code. Commands run
-  without a shell, with timeouts.
+- **Read-only by construction.** External commands go through one allow-list of exact command shapes
+  (`simctl list`, `simctl spawn … log show`, `devicectl list devices`, `xcodebuild -list/-showBuildSettings` with
+  `-disableAutomaticPackageResolution`, `codesign -d`, `security find-identity`, …). Anything else, including an
+  allowed command with an extra flag, is refused even when called from code. Commands run without a shell, with
+  timeouts, and never resolve Swift packages.
 - **No hardcoded secrets, and none printed.** Google API keys, private keys, tokens and JWTs are redacted from
   all output. Plist values under secret-looking keys are masked. Provisioning profiles are reduced to certificate
   SHA-1s.
 - **MCP path policy.** Reads are limited to project roots (env or MCP client roots) and Xcode's diagnostic
-  folders. Symlinks are resolved first. Credential files (`.p12`, `.p8`, keychains, `.env`, service-account
-  JSON, SSH keys…) are always refused.
+  folders. Every file is symlink-resolved and checked, including files found by scanning a folder, so a
+  symlink committed inside a project cannot reach outside it. The server refuses to treat `/` or your home
+  folder as a project root. Credential files (`.p12`, `.p8`, keychains, `.env`, service-account JSON, SSH
+  keys…) are always refused.
 - **Validated inputs.** Unknown tool arguments are rejected. Log predicates are built from validated values;
   raw predicates are never accepted.
 - **Skills tell agents what *not* to do.** Don't delete DerivedData or reset simulators without asking, never
@@ -222,7 +225,7 @@ Details: [SECURITY.md](SECURITY.md).
 python3 tools/validate_skills.py            # Agent Skills format: frontmatter, name/dir match, <500 lines,
                                             # links resolve, scripts --help, every rule id documented
 python3 tools/sync_common.py --check        # helper copies identical across skills
-python3 -m unittest discover -s tests -v    # 58 tests: every rule fires on the fixture, negatives stay quiet,
+python3 -m unittest discover -s tests -v    # 99 tests: every rule and classifier fires, negatives stay quiet,
                                             # MCP JSON-RPC end-to-end (roots, path policy, redaction, errors)
 python3 mcp-server/server.py --list-tools   # server smoke test
 npx @modelcontextprotocol/inspector python3 mcp-server/server.py   # interactive MCP inspector (Node)

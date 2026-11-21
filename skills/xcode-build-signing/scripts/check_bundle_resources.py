@@ -42,6 +42,13 @@ ASSET_LOOKUP = re.compile(
 FONT_USE = re.compile(r"\bUIFont\s*\(\s*name:\s*\"|\bFont\.custom\s*\(\s*\"|\.custom\s*\(\s*\"")
 ASSET_DIRS = (".imageset", ".colorset", ".dataset", ".appiconset", ".symbolset", ".imagestack")
 SOURCE_SKIP = c.SKIP_DIRS | {".xcodeproj", ".xcworkspace"}
+# Lookups name the compiled product; the source tree holds the uncompiled one.
+COMPILED = {
+    "momd": (".xcdatamodeld",), "mom": (".xcdatamodel",), "storyboardc": (".storyboard",), "nib": (".xib",),
+    "car": (".xcassets",), "metallib": (".metal",), "cdm": (".xcmappingmodel",),
+}
+SOURCE_DIR_PRODUCTS = (".bundle", ".xcdatamodeld", ".xcdatamodel", ".xcassets", ".xcmappingmodel")
+APP_DIR_PRODUCTS = (".bundle", ".momd", ".mom", ".storyboardc", ".nib", ".car")
 
 
 def index_tree(roots: Sequence[str]):
@@ -51,7 +58,7 @@ def index_tree(roots: Sequence[str]):
     for root in roots:
         if os.path.isfile(root):
             root = os.path.dirname(root) or "."
-        for dirpath, dirnames, filenames in os.walk(root):
+        for dirpath, dirnames, filenames in c.walk(root, skip_dirs=None, skip_hidden=False):
             keep = []
             for d in dirnames:
                 if d.endswith(ASSET_DIRS):
@@ -64,8 +71,8 @@ def index_tree(roots: Sequence[str]):
                             assets.add("/".join(parts[i + 1:])[: -len(os.path.splitext(d)[1])])
                 elif d not in SOURCE_SKIP and not d.startswith("."):
                     keep.append(d)
-                    if d.endswith((".bundle",)):
-                        files.setdefault(d, []).append(os.path.join(dirpath, d))
+                if d.endswith(SOURCE_DIR_PRODUCTS):
+                    files.setdefault(d, []).append(os.path.join(dirpath, d))
             dirnames[:] = keep
             for f in filenames:
                 files.setdefault(f, []).append(os.path.join(dirpath, f))
@@ -75,10 +82,18 @@ def index_tree(roots: Sequence[str]):
     return files, assets
 
 
+def _in_sources(files: Dict[str, List[str]], name: str, ext: str, filename: str) -> bool:
+    if filename in files:
+        return True
+    if not ext and "." in name:
+        name, ext = name.rsplit(".", 1)
+    return any(f"{name}{src}" in files for src in COMPILED.get(ext.lower(), ()))
+
+
 def index_app(app: str) -> Set[str]:
     rels = set()
-    for dirpath, dirnames, filenames in os.walk(app):
-        for name in filenames + [d for d in dirnames if d.endswith(".bundle")]:
+    for dirpath, dirnames, filenames in c.walk(app, skip_dirs=None, skip_hidden=False):
+        for name in filenames + [d for d in dirnames if d.endswith(APP_DIR_PRODUCTS)]:
             rels.add(os.path.relpath(os.path.join(dirpath, name), app).replace(os.sep, "/"))
     return rels
 
@@ -111,15 +126,16 @@ def analyze(sources: Sequence[str], app: Optional[str] = None, plist: Optional[s
             name, ext, subdir = m.group(1), m.group(2) or "", m.group(3) or ""
             filename = f"{name}.{ext}" if ext else name
             line = sf.line_of(m.start())
-            if filename not in files:
+            if not _in_sources(files, name, ext, filename):
                 findings.append(c.Finding("BR001", "error", f"'{filename}' not found anywhere under the sources",
                                           sf.path, line, "Check spelling/case (device file systems are case-"
                                           "sensitive), the extension, and that the file was added to the repo."))
                 continue
             if app:
                 expected = f"{subdir}/{filename}" if subdir else filename
-                if expected in app_files:
-                    continue
+                if expected in app_files or any(re.fullmatch(r"[^/]+\.lproj/" + re.escape(expected), r)
+                                                for r in app_files):
+                    continue  # Bundle lookups search the localization folders themselves
                 nested = sorted(r for r in app_files if r.endswith("/" + filename) or r == filename)
                 if nested:
                     findings.append(c.Finding("BR003", "error", f"'{filename}' is bundled at {nested[0]} but the "

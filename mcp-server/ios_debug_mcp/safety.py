@@ -23,7 +23,7 @@ DENY_BASENAME = re.compile(
     r"(^\.env(\..+)?$)|(^\.netrc$)|(^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$)|"
     r"(^AuthKey_.*)|(^credentials(\.json)?$)|(^service[-_]?account.*\.json$)|(^.*-firebase-adminsdk-.*\.json$)",
     re.I)
-DENY_COMPONENT = {".ssh", ".gnupg", ".aws", "Keychains", ".git"}
+DENY_COMPONENT = {".ssh", ".gnupg", ".aws", "keychains", ".git"}  # compared case-insensitively (APFS)
 
 MAX_TEXT_INPUT = 4 * 1024 * 1024
 
@@ -46,8 +46,10 @@ class PathPolicy:
     MCP `roots` (when it supports them), else the server's working directory.
     """
 
-    def __init__(self, env: Optional[dict] = None):
+    def __init__(self, env: Optional[dict] = None, cwd: Optional[str] = None):
         env = os.environ if env is None else env
+        self._cwd = cwd
+        self._home = self._norm(env.get("HOME") or "~")
         raw = env.get("IOS_DEBUG_MCP_ROOTS", "")
         self.env_roots = [self._norm(p) for p in raw.split(os.pathsep) if p.strip()]
         self.client_roots: List[str] = []
@@ -62,7 +64,15 @@ class PathPolicy:
 
     @property
     def project_roots(self) -> List[str]:
-        return self.env_roots or self.client_roots or [self._norm(os.getcwd())]
+        if self.env_roots or self.client_roots:
+            return self.env_roots or self.client_roots
+        cwd = self._norm(self._cwd or os.getcwd())
+        if cwd == os.sep or cwd == self._home or self._home.startswith(cwd.rstrip(os.sep) + os.sep):
+            # A host that launches the server from / or $HOME would otherwise expose that whole tree.
+            raise PolicyError(f"no project root: the server was started in {cwd}, which is too broad to "
+                              "expose. Ask the user to set IOS_DEBUG_MCP_ROOTS to the project folder or "
+                              "to open the project as an MCP root in their client.")
+        return [cwd]
 
     @property
     def allowed_roots(self) -> List[str]:
@@ -83,6 +93,24 @@ class PathPolicy:
                 continue
         return False
 
+    @staticmethod
+    def denied(real: str) -> Optional[str]:
+        """The guard that protects `real`, or None. Exposed so tests can assert the exact guard."""
+        if any(p.lower() in DENY_COMPONENT for p in real.split(os.sep)):
+            return "protected directory"
+        if DENY_BASENAME.search(os.path.basename(real)):
+            return "credential file name"
+        return None
+
+    def allows(self, path: str) -> bool:
+        """Read guard for files the skill scripts discover by walking a directory or derive from a
+        resolved path. It applies the same rules as resolve(): inside a root, not protected."""
+        real = self._norm(path)
+        try:
+            return self._inside(real) and self.denied(real) is None
+        except PolicyError:
+            return False
+
     def resolve(self, path: str, *, kind: str = "any", exts: Optional[Sequence[str]] = None,
                 must_exist: bool = True) -> str:
         """Return an absolute, symlink-resolved path or raise PolicyError.
@@ -97,10 +125,10 @@ class PathPolicy:
         real = self._norm(expanded)
         if not self._inside(real):
             raise PolicyError(f"{path} is outside the allowed roots ({', '.join(self.project_roots)}). "
-                              "Set IOS_DEBUG_MCP_ROOTS or open the project as an MCP root.")
-        parts = real.split(os.sep)
-        if any(p in DENY_COMPONENT for p in parts) or DENY_BASENAME.search(os.path.basename(real)):
-            raise PolicyError(f"refusing to read {os.path.basename(real)}: it may contain credentials")
+                              "Ask the user to set IOS_DEBUG_MCP_ROOTS or open the project as an MCP root.")
+        guard = self.denied(real)
+        if guard:
+            raise PolicyError(f"refusing to read {os.path.basename(real)}: {guard}, it may contain credentials")
         if must_exist and not os.path.exists(real):
             raise PolicyError(f"no such file or directory: {path}")
         if kind == "file" and must_exist and not os.path.isfile(real):

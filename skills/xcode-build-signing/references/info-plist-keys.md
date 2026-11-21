@@ -17,7 +17,9 @@
 | Built product | `App.app/Info.plist` with `$(…)` expanded | `check_plist.py App.app --built` |
 
 `$(VAR)` references are expanded from the target's build settings at build time. An undefined variable
-expands to an **empty string** (PL003). An empty `CFBundleVersion` fails upload.
+expands to an **empty string** (PL003). An empty `CFBundleVersion` fails upload. With `--project`,
+`check_plist.py` reads both `project.pbxproj` and every `.xcconfig` next to the project, because many
+projects keep `MARKETING_VERSION` and similar settings in xcconfig files.
 
 ## 2. Required bundle keys
 

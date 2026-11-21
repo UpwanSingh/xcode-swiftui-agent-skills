@@ -65,7 +65,7 @@ DIAGNOSES = [
     (r"NSRangeException", "Uncaught NSException: index beyond bounds in an Objective-C collection.", ""),
     (r"NSUnknownKeyException|not key value coding-compliant", "Broken IBOutlet/KVC connection.",
      "Remove stale outlet connections in the storyboard/xib."),
-    (r"EXC_BAD_ACCESS.*KERN_INVALID_ADDRESS at 0x0{0,12}[0-9a-f]{0,3}\b|SIGSEGV.*0x0+\b",
+    (r"KERN_INVALID_ADDRESS at 0x0*[0-9a-f]{1,4}\b",
      "Memory access to a null/near-null address.",
      "Usually an unowned/unsafe reference or C/ObjC pointer. Run with Address Sanitizer."),
     (r"EXC_BAD_ACCESS|SIGSEGV|SIGBUS", "Invalid memory access (use-after-free, data race, or unsafe pointer).",
@@ -77,6 +77,25 @@ DIAGNOSES = [
      "The top app frame is the failing line; look for !, try!, as!, array subscripts, or fatalError."),
 ]
 _DIAG = [(re.compile(rx, re.S), d, n) for rx, d, n in DIAGNOSES]
+
+
+HEADER_BYTES = 64 * 1024
+
+
+def _read_header(path: str) -> Optional[Dict[str, Any]]:
+    """Parse only the first line of an .ips (its JSON header), so listing never loads whole
+    reports. Raises UsageError for unreadable or refused files."""
+    c.require_allowed(path)
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline(HEADER_BYTES)
+    except OSError as exc:
+        raise c.UsageError(f"cannot read {path}: {exc.strerror}") from exc
+    try:
+        header = json.loads(first)
+    except ValueError:
+        return None
+    return header if isinstance(header, dict) else None
 
 
 def _read_ips(path: str) -> tuple:
@@ -95,17 +114,21 @@ def _read_ips(path: str) -> tuple:
 
 def list_reports(dirs: Optional[List[str]] = None, app: Optional[str] = None, limit: int = 20,
                  crashes_only: bool = False) -> Dict[str, Any]:
-    reports = []
+    reports, errors = [], []
     for d in dirs or REPORT_DIRS:
         d = os.path.expanduser(d)
         if not os.path.isdir(d):
             continue
-        for dirpath, _, filenames in os.walk(d):
+        for dirpath, _, filenames in c.walk(d, skip_dirs=None, skip_hidden=False):
             for f in filenames:
                 if not f.endswith((".ips", ".crash")):
                     continue
                 path = os.path.join(dirpath, f)
-                header, _, _ = _read_ips(path) if f.endswith(".ips") else (None, None, None)
+                try:
+                    header = _read_header(path) if f.endswith(".ips") else None
+                except c.UsageError as exc:  # one unreadable report must not hide the others
+                    errors.append(str(exc))
+                    continue
                 name = (header or {}).get("app_name") or (header or {}).get("name") or f.split("-")[0]
                 bug = str((header or {}).get("bug_type", "109" if f.endswith(".crash") else ""))
                 if app and app.lower() not in name.lower() and app.lower() not in f.lower():
@@ -118,7 +141,7 @@ def list_reports(dirs: Optional[List[str]] = None, app: Optional[str] = None, li
                                 "mtime": os.path.getmtime(path)})
     reports.sort(key=lambda r: r["mtime"], reverse=True)
     return {"reports": reports[:max(1, limit)], "total": len(reports),
-            "searched": [os.path.expanduser(d) for d in dirs or REPORT_DIRS]}
+            "searched": [os.path.expanduser(d) for d in dirs or REPORT_DIRS], "errors": errors}
 
 
 def _frame_text(frame: Dict[str, Any], images: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -261,6 +284,8 @@ def main(argv=None) -> int:
             for r in result["reports"]:
                 print(f"{r['timestamp'] or '-':<26} {r['kind']:<15} {r['app']:<24} {r['version'] or '':<10} {r['path']}")
             print(f"{len(result['reports'])} of {result['total']} report(s) in {', '.join(result['searched'])}")
+            for e in result["errors"]:
+                print(f"skipped: {e}", file=sys.stderr)
         return 0
     result = summarize(args.path, args.frames)
     print(json.dumps(result, indent=2, default=str) if args.json else format_summary(result))

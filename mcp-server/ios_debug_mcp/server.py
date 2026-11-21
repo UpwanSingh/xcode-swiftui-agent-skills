@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 from . import __version__
 from .safety import PathPolicy, PolicyError, truncate
-from .tools import BY_NAME, TOOLS, ArgumentError, call, common
+from .tools import BY_NAME, TOOLS, ArgumentError, SkillsNotFound, call, common
 
 SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 ROOTS_REQUEST_PREFIX = "ios-debug-mcp/roots/"
@@ -42,7 +42,8 @@ class Server:
 
     # ------------------------------------------------------------------ transport
     def send(self, message: Dict[str, Any]) -> None:
-        self.out.write(json.dumps(message, ensure_ascii=False, default=str) + "\n")
+        # ensure_ascii: a lone surrogate from a tool result must not crash the write.
+        self.out.write(json.dumps(message, default=str) + "\n")
         self.out.flush()
 
     def serve(self, stream=None) -> None:
@@ -53,7 +54,7 @@ class Server:
                 continue
             try:
                 message = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):  # RecursionError: absurdly nested input
                 self.send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
                 continue
             batch = message if isinstance(message, list) else [message]
@@ -81,6 +82,8 @@ class Server:
             return None
         method, params, mid = msg["method"], msg.get("params") or {}, msg.get("id")
         is_notification = "id" not in msg
+        if not isinstance(method, str) or not isinstance(params, dict):
+            return None if is_notification else self._error(mid, -32602, "method must be a string and params an object")
         try:
             if method == "initialize":
                 result = self._initialize(params)
@@ -147,7 +150,7 @@ class Server:
             payload = call(name, params.get("arguments"), self.policy)
             text = json.dumps(payload, indent=1, ensure_ascii=False, default=str)
             is_error = False
-        except (ArgumentError, PolicyError) as exc:
+        except (ArgumentError, PolicyError, SkillsNotFound) as exc:
             text, is_error = f"{name}: {exc}", True
         except Exception as exc:  # skill scripts raise UsageError for bad input / missing Xcode
             if type(exc).__name__ == "UsageError":
@@ -156,7 +159,13 @@ class Server:
                 log.error("tool %s crashed:\n%s", name, traceback.format_exc())
                 text = f"{name}: internal error: {type(exc).__name__}: {exc}"
             is_error = True
-        text = truncate(common().redact_text(text), self.max_output)
+        try:
+            text = common().redact_text(text)
+        except SkillsNotFound as exc:
+            # Without the helper there is no redaction, so never return tool output; our own
+            # error messages carry no file content.
+            text, is_error = (text if is_error else f"{name}: {exc}"), True
+        text = truncate(text, self.max_output)
         return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 

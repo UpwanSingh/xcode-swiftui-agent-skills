@@ -6,7 +6,7 @@ Subcommands:
   projects [--root DIR]       find .xcodeproj, .xcworkspace, Package.swift, Info.plist, entitlements, ...
   schemes PATH                `xcodebuild -list -json` for a .xcodeproj/.xcworkspace
   settings PATH [--scheme S]  signing/bundle/Info.plist/Swift build settings (`-showBuildSettings`)
-  logs [--project NAME]       newest .xcactivitylog files in DerivedData
+  logs [--project NAME]       newest .xcactivitylog files in DerivedData (--kind Build by default)
 
 Only allow-listed commands are run (see _common.ALLOWED_COMMANDS); nothing is built.
 
@@ -21,6 +21,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -76,7 +77,7 @@ def projects(root: str = ".", max_depth: int = 5) -> Dict[str, Any]:
         raise c.UsageError(f"not a directory: {root}")
     found: Dict[str, List[str]] = {"xcodeproj": [], "xcworkspace": [], "entitlements": [], "files": []}
     base = os.path.abspath(root).rstrip(os.sep).count(os.sep)
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in c.walk(root, skip_dirs=None, skip_hidden=False):
         depth = os.path.abspath(dirpath).count(os.sep) - base
         keep = []
         for d in sorted(dirnames):
@@ -105,11 +106,31 @@ def _container_flag(path: str) -> List[str]:
     raise c.UsageError("expected a .xcodeproj or .xcworkspace path")
 
 
+def _json_from(out: str, opener: str, what: str) -> Any:
+    start = out.find(opener)
+    try:
+        return json.loads(out[start:]) if start >= 0 else json.loads(out)
+    except ValueError as exc:
+        raise c.UsageError(f"{what} printed no parseable JSON ({exc}); first output: {out.strip()[:300]!r}") from exc
+
+
+def _xcodebuild_error(what: str, out: str, err: str) -> c.UsageError:
+    text = (err or out).strip()
+    if re.search(r"resolved file is required|Package\.resolved|automatic package resolution", text, re.I):
+        return c.UsageError(f"{what} needs Swift packages resolved first. This tool never resolves packages "
+                            "(that would fetch code and write Package.resolved); open the project in Xcode once "
+                            "or run `xcodebuild -resolvePackageDependencies` yourself, then retry.")
+    return c.UsageError(f"{what} failed: {text[:800]}")
+
+
 def schemes(path: str) -> Dict[str, Any]:
-    code, out, err = c.run_command(["xcodebuild", "-list", "-json"] + _container_flag(path), timeout=90)
+    # -disableAutomaticPackageResolution: listing schemes must not fetch packages, run their
+    # manifests or write Package.resolved into the user's project.
+    cmd = ["xcodebuild", "-list", "-json", "-disableAutomaticPackageResolution"] + _container_flag(path)
+    code, out, err = c.run_command(cmd, timeout=90)
     if code != 0:
-        raise c.UsageError(f"xcodebuild -list failed: {(err or out).strip()[:800]}")
-    return json.loads(out[out.find("{"):])
+        raise _xcodebuild_error("xcodebuild -list", out, err)
+    return _json_from(out, "{", "xcodebuild -list")
 
 
 def settings(path: str, scheme: Optional[str] = None, configuration: Optional[str] = None,
@@ -125,8 +146,8 @@ def settings(path: str, scheme: Optional[str] = None, configuration: Optional[st
         raise c.UsageError("a workspace needs --scheme")
     code, out, err = c.run_command(cmd, timeout=180)
     if code != 0:
-        raise c.UsageError(f"xcodebuild -showBuildSettings failed: {(err or out).strip()[:800]}")
-    data = json.loads(out[out.find("["):])
+        raise _xcodebuild_error("xcodebuild -showBuildSettings", out, err)
+    data = _json_from(out, "[", "xcodebuild -showBuildSettings")
     wanted = None if all_keys else set(keys or RELEVANT_SETTINGS)
     targets = []
     for entry in data:
@@ -139,12 +160,25 @@ def settings(path: str, scheme: Optional[str] = None, configuration: Optional[st
     return {"targets": targets, "filtered": wanted is not None}
 
 
-def logs(project: Optional[str] = None, limit: int = 5, derived_data: str = DERIVED_DATA) -> Dict[str, Any]:
+LOG_KINDS = ("Build", "Test", "Package", "Launch", "Localization", "all")
+
+
+def logs(project: Optional[str] = None, limit: int = 5, derived_data: str = DERIVED_DATA,
+         kind: str = "Build") -> Dict[str, Any]:
+    """Newest .xcactivitylog files. `kind` defaults to Build: Package/Test logs fed to
+    extract_build_errors look like 'UNKNOWN, 0 errors' and would hide the real build failure."""
+    if project and not re.fullmatch(r"[\w .+-]+", project):
+        raise c.UsageError("project must be a plain project name (letters, digits, space, . + - _)")
+    if kind not in LOG_KINDS:
+        raise c.UsageError(f"kind must be one of {', '.join(LOG_KINDS)}")
     root = os.path.expanduser(derived_data)
-    pattern = os.path.join(root, f"{project}-*" if project else "*", "Logs", "*", "*.xcactivitylog")
-    files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)[:max(1, limit)]
+    pattern = os.path.join(root, f"{glob.escape(project)}-*" if project else "*", "Logs",
+                           "*" if kind == "all" else kind, "*.xcactivitylog")
+    found = [f for f in glob.glob(pattern) if c.path_allowed(f)]
+    files = sorted(found, key=os.path.getmtime, reverse=True)[:max(1, limit)]
     return {
         "derived_data": root,
+        "kind": kind,
         "logs": [{"path": f, "kind": os.path.basename(os.path.dirname(f)), "modified": os.path.getmtime(f),
                   "size": os.path.getsize(f)} for f in files],
         "hint": None if files else "No logs found. Build once in Xcode, or capture CLI output with "
@@ -173,6 +207,7 @@ def main(argv=None) -> int:
     pl.add_argument("--project", help="DerivedData folder prefix (usually the project name)")
     pl.add_argument("--limit", type=int, default=5)
     pl.add_argument("--derived-data", default=DERIVED_DATA)
+    pl.add_argument("--kind", default="Build", choices=LOG_KINDS, help="log folder (default: %(default)s)")
     args = p.parse_args(argv)
 
     if args.cmd == "env":
@@ -184,7 +219,7 @@ def main(argv=None) -> int:
     elif args.cmd == "settings":
         result = settings(args.path, args.scheme, args.configuration, args.target, args.keys, args.all)
     else:
-        result = logs(args.project, args.limit, args.derived_data)
+        result = logs(args.project, args.limit, args.derived_data, args.kind)
     c.print_json(result)
     return 0
 

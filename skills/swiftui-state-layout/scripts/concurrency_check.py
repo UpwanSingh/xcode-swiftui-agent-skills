@@ -166,13 +166,30 @@ def check_file(sf: c.SourceFile, default_main_actor: bool) -> List[c.Finding]:
     return out
 
 
+PACKAGE_MAIN_ACTOR = re.compile(r"\.defaultIsolation\s*\(\s*MainActor\.self\s*\)")
+
+
+def _file_is_main_actor(sf: c.SourceFile, project_main: bool, cache: Dict[str, bool]) -> bool:
+    """Default isolation applies per module: sources of a Swift package (Sources/, Tests/,
+    Plugins/ under a Package.swift) follow that manifest, everything else the Xcode project."""
+    pkg = c.find_upwards(sf.path, ["Package.swift"])
+    if pkg:
+        rel = os.path.relpath(os.path.abspath(sf.path), pkg).split(os.sep)
+        if rel and rel[0] in ("Sources", "Tests", "Plugins"):
+            if pkg not in cache:
+                cache[pkg] = bool(PACKAGE_MAIN_ACTOR.search(c.read_text(os.path.join(pkg, "Package.swift"))))
+            return cache[pkg]
+    return project_main
+
+
 def analyze(paths: Sequence[str], settings_path: Optional[str] = None) -> dict:
     settings = detect_settings(paths, settings_path)
-    default_main = settings.get("default_isolation") == "MainActor"
+    project_main = "MainActor" in (settings.get("SWIFT_DEFAULT_ACTOR_ISOLATION") or [])
     files = c.load_swift_files(paths)
     findings: List[c.Finding] = []
+    cache: Dict[str, bool] = {}
     for sf in files:
-        findings.extend(check_file(sf, default_main))
+        findings.extend(check_file(sf, _file_is_main_actor(sf, project_main, cache)))
     return c.make_result(findings, files_scanned=len(files), settings=settings)
 
 

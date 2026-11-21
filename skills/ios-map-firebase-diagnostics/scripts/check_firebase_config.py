@@ -44,9 +44,8 @@ SKIP = c.SKIP_DIRS | {".xcodeproj", ".xcworkspace"}
 
 def _find(root: str, predicate) -> List[str]:
     out = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP and not d.startswith("."))
-        out.extend(os.path.join(dirpath, f) for f in sorted(filenames) if predicate(f))
+    for dirpath, _, filenames in c.walk(root, SKIP):
+        out.extend(os.path.join(dirpath, f) for f in filenames if predicate(f))
     return out
 
 

@@ -19,9 +19,9 @@ and the MCP server always produce the same results.
 |---|---|---|
 | `xcode_environment` | macOS/Xcode/Swift versions, developer dir, setup hints | `sw_vers`, `xcode-select -p`, `xcodebuild -version`, `swift --version` |
 | `find_xcode_projects` | projects, workspaces, Package.swift, Info.plist, entitlements, Firebase files | file walk |
-| `list_schemes` | schemes, targets, configurations | `xcodebuild -list -json` |
+| `list_schemes` | schemes, targets, configurations | `xcodebuild -list -json -disableAutomaticPackageResolution` |
 | `show_build_settings` | signing/bundle/Info.plist/Swift settings per target | `xcodebuild -showBuildSettings -json -disableAutomaticPackageResolution` |
-| `find_build_logs` | newest `.xcactivitylog` files | DerivedData walk |
+| `find_build_logs` | newest `.xcactivitylog` files (`kind`: Build by default, or Test/Package/…/all) | DerivedData walk |
 | `extract_build_errors` | classified, de-duplicated errors with fix hints | parse |
 | `read_plist` | Info.plist / entitlements / xcprivacy / profile as JSON (secrets masked) | parse |
 | `check_info_plist` | PL001–PL010 findings | parse + source scan |
@@ -48,8 +48,8 @@ All tools are annotated `readOnlyHint: true`, `destructiveHint: false`, `idempot
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IOS_DEBUG_MCP_ROOTS` | *(client roots, else cwd)* | `:`-separated directories tools may read |
-| `IOS_DEBUG_MCP_SYSTEM_DIRS` | `1` | Also allow Xcode's DerivedData, Archives, DiagnosticReports, provisioning-profile folders. Set `0` to disable |
+| `IOS_DEBUG_MCP_ROOTS` | *(client roots, else cwd)* | `:`-separated directories tools may read. Takes precedence over client roots. The cwd fallback is refused when it is `/`, your home folder or one of its ancestors |
+| `IOS_DEBUG_MCP_SYSTEM_DIRS` | `1` | Also allow Xcode's DerivedData, Archives, DiagnosticReports and provisioning-profile folders, which hold data for every project on the machine. Set `0` to disable |
 | `IOS_DEBUG_MCP_MAX_OUTPUT` | `60000` | Max characters per tool response |
 | `IOS_DEBUG_MCP_LOG` | `WARNING` | stderr log level (`INFO` shows initialize/roots) |
 | `IOS_DEBUG_SKILLS_DIR` | `../skills` | Where the skill scripts live (only needed if you move the server) |

@@ -53,6 +53,14 @@ fi
 
 run() { if [[ $DRY -eq 1 ]]; then echo "+ $*"; else "$@"; fi; }
 
+# Only ever delete what this installer could have put there: a symlink, or a folder whose
+# SKILL.md declares the same skill name. Anything else is left alone.
+ours() {
+  local target="$1" name="$2"
+  [[ -L "$target" ]] && return 0
+  [[ -f "$target/SKILL.md" ]] && grep -qE "^name:[[:space:]]*${name}[[:space:]]*$" "$target/SKILL.md"
+}
+
 SKILLS=()
 for dir in "$REPO"/skills/*/; do
   name="$(basename "$dir")"
@@ -63,7 +71,10 @@ done
 
 if [[ $UNINSTALL -eq 1 ]]; then
   for name in "${SKILLS[@]}"; do
-    if [[ -e "$DEST/$name" || -L "$DEST/$name" ]]; then run rm -rf "${DEST:?}/$name"; echo "removed $DEST/$name"; fi
+    if [[ -e "$DEST/$name" || -L "$DEST/$name" ]]; then
+      if ours "$DEST/$name" "$name"; then run rm -rf "${DEST:?}/$name"; echo "removed $DEST/$name"
+      else echo "kept $DEST/$name (not installed by this script)" >&2; fi
+    fi
   done
   exit 0
 fi
@@ -73,6 +84,7 @@ for name in "${SKILLS[@]}"; do
   target="$DEST/$name"
   if [[ -e "$target" || -L "$target" ]]; then
     if [[ $FORCE -eq 0 ]]; then echo "skip $target (exists; use --force to replace)"; continue; fi
+    if ! ours "$target" "$name"; then echo "skip $target (exists and was not installed by this script)" >&2; continue; fi
     run rm -rf "$target"
   fi
   if [[ "$MODE" == "link" ]]; then

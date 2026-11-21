@@ -25,6 +25,7 @@ setup() {
   local p12="$work/cert.p12"
   printf '%s' "$P12_BASE64" | base64 --decode > "$p12"
 
+  cleanup  # idempotent: a previous job on a self-hosted runner may have left the keychain behind
   security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
   security set-keychain-settings -lut 21600 "$KEYCHAIN"          # auto-lock after 6h
   security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
@@ -49,6 +50,7 @@ setup() {
 }
 
 cleanup() {
+  # delete-keychain also removes it from the search list
   security delete-keychain "$KEYCHAIN" 2>/dev/null || true
 }
 

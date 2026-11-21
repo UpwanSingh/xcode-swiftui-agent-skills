@@ -119,17 +119,47 @@ def cli(main: Callable[[Optional[Sequence[str]]], int]) -> Callable[[Optional[Se
 
 # --------------------------------------------------------------------------- files
 
+# Optional read guard installed by a host such as the MCP server. When set, it receives the
+# symlink-resolved path of every file a script walks to or opens, and anything it rejects is
+# skipped while walking (or refused when opened). This is what stops a symlink committed inside
+# a scanned project from pulling in ~/.ssh/... or other files outside the allowed roots.
+PATH_GUARD: Optional[Callable[[str], bool]] = None
+
+
+def path_allowed(path: str) -> bool:
+    return PATH_GUARD is None or bool(PATH_GUARD(os.path.realpath(path)))
+
+
+def require_allowed(path: str) -> str:
+    if not path_allowed(path):
+        raise UsageError(f"refusing to read {path}: outside the allowed roots or a protected file")
+    return path
+
+
+def walk(root: str, skip_dirs: Optional[Iterable[str]] = SKIP_DIRS,
+         skip_hidden: bool = True) -> Iterator[Tuple[str, List[str], List[str]]]:
+    """os.walk (never following directory symlinks) that prunes noise directories and drops
+    entries PATH_GUARD rejects. Callers may prune `dirnames` further in place."""
+    skip = set(skip_dirs or ())
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in skip and not (skip_hidden and d.startswith("."))
+                             and path_allowed(os.path.join(dirpath, d)))
+        filenames[:] = sorted(f for f in filenames if path_allowed(os.path.join(dirpath, f)))
+        yield dirpath, dirnames, filenames
+
+
 def iter_files(paths: Sequence[str], exts: Sequence[str], skip_dirs: Iterable[str] = SKIP_DIRS) -> Iterator[str]:
     """Yield files under `paths` with one of `exts`. Explicit file arguments are always yielded."""
-    skip = set(skip_dirs)
     seen = set()
     for p in paths:
         if not os.path.exists(p):
             raise UsageError(f"no such file or directory: {p}")
         if os.path.isfile(p):
-            candidates: Iterable[str] = [p]
+            candidates: Iterable[str] = [require_allowed(p)]
         else:
-            candidates = _walk(p, tuple(exts), skip)
+            candidates = (os.path.join(d, f) for d, _, files in walk(p, skip_dirs)
+                          for f in files if f.endswith(tuple(exts)))
         for path in candidates:
             real = os.path.realpath(path)
             if real not in seen:
@@ -137,15 +167,8 @@ def iter_files(paths: Sequence[str], exts: Sequence[str], skip_dirs: Iterable[st
                 yield path
 
 
-def _walk(root: str, exts: Tuple[str, ...], skip: set) -> Iterator[str]:
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in skip and not d.startswith("."))
-        for name in sorted(filenames):
-            if name.endswith(exts):
-                yield os.path.join(dirpath, name)
-
-
 def read_text(path: str) -> str:
+    require_allowed(path)
     try:
         size = os.path.getsize(path)
         if size > MAX_FILE_BYTES:
@@ -205,6 +228,17 @@ def strip_swift(src: str) -> str:
         blank(i + 1, j)
         return j + 1 if j < n and src[j] == '"' else j
 
+    def skip_raw_string(i: int) -> int:
+        """`i` points at the first `#` of a raw string such as #"..."#; backslashes are literal."""
+        hashes = len(re.match(r"#+", src[i:]).group(0))
+        start = i + hashes
+        quote = '"""' if src.startswith('"""', start) else '"'
+        close = quote + "#" * hashes
+        end = src.find(close, start + len(quote))
+        end = n if end == -1 else end
+        blank(start + len(quote), end)
+        return min(end + len(close), n)
+
     def skip_interp(j: int) -> int:
         """`j` points at a backslash of `\\(`; return index past the matching `)`."""
         depth, k = 1, j + 2
@@ -240,6 +274,8 @@ def strip_swift(src: str) -> str:
                     j += 1
             blank(i, j)
             i = j
+        elif src[i] == "#" and re.match(r'#+"', src[i:i + 16]):
+            i = skip_raw_string(i)
         elif src[i] == '"':
             i = skip_string(i)
         else:
@@ -340,6 +376,7 @@ def extract_embedded_plist(data: bytes) -> Optional[bytes]:
 
 
 def load_plist(path: str) -> Any:
+    require_allowed(path)
     try:
         with open(path, "rb") as fh:
             data = fh.read(MAX_FILE_BYTES)
@@ -420,6 +457,8 @@ _SECRET_PATTERNS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), "[REDACTED SLACK TOKEN]"),
     (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED AWS KEY]"),
     (re.compile(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_\-]{20,}"), "[REDACTED API KEY]"),
+    (re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}"), "[REDACTED STRIPE KEY]"),
+    (re.compile(r"\bsntry[su]_[A-Za-z0-9_=+/-]{20,}"), "[REDACTED SENTRY TOKEN]"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[REDACTED JWT]"),
 ]
 
@@ -454,26 +493,62 @@ def redact_obj(obj: Any, key: Optional[str] = None) -> Any:
 
 # --------------------------------------------------------------------------- read-only subprocesses
 
-# Every external command any script may run. Each entry is an argv prefix; "*" matches one
-# argument. Nothing here builds, signs, installs, erases or writes project files.
-ALLOWED_COMMANDS: Tuple[Tuple[str, ...], ...] = (
-    ("sw_vers",),
-    ("xcode-select", "-p"),
-    ("xcodebuild", "-version"),
-    ("xcodebuild", "-list"),
-    ("xcodebuild", "-showBuildSettings"),
-    ("swift", "--version"),
-    ("xcrun", "simctl", "list"),
-    ("xcrun", "simctl", "spawn", "*", "log", "show"),
-    ("xcrun", "devicectl", "list", "devices"),
-    ("codesign", "-d"),
-    ("security", "find-identity"),
+@dataclass(frozen=True)
+class AllowedCommand:
+    """One read-only command shape. `prefix` items are literal, or "*" for one non-flag value.
+    After the prefix, only `options` (each followed by one non-flag value), bare `flags`, and up
+    to `positionals` non-flag arguments may appear, so no other flag can be smuggled in."""
+    prefix: Tuple[str, ...]
+    options: frozenset = frozenset()
+    flags: frozenset = frozenset()
+    positionals: int = 0
+
+
+# Every external command any script may run. Nothing here builds, signs, installs, erases,
+# resolves packages or writes project files.
+ALLOWED_COMMANDS: Tuple[AllowedCommand, ...] = (
+    AllowedCommand(("sw_vers",)),
+    AllowedCommand(("xcode-select", "-p")),
+    AllowedCommand(("xcodebuild", "-version")),
+    AllowedCommand(("swift", "--version")),
+    AllowedCommand(("xcodebuild", "-list", "-json", "-disableAutomaticPackageResolution"),
+                   options=frozenset({"-project", "-workspace"})),
+    AllowedCommand(("xcodebuild", "-showBuildSettings", "-json", "-disableAutomaticPackageResolution"),
+                   options=frozenset({"-project", "-workspace", "-scheme", "-target", "-configuration"})),
+    AllowedCommand(("xcrun", "simctl", "list", "devices", "--json")),
+    AllowedCommand(("xcrun", "simctl", "spawn", "*", "log", "show"),
+                   options=frozenset({"--style", "--last", "--predicate"}), flags=frozenset({"--info", "--debug"})),
+    AllowedCommand(("xcrun", "devicectl", "list", "devices"), options=frozenset({"--json-output"})),
+    AllowedCommand(("codesign", "-d", "--entitlements", "-", "--xml"), positionals=1),
+    AllowedCommand(("security", "find-identity", "-p", "codesigning")),
 )
 
 
+def _is_value(arg: str) -> bool:
+    return bool(arg) and not arg.startswith("-")
+
+
 def command_allowed(argv: Sequence[str]) -> bool:
-    for prefix in ALLOWED_COMMANDS:
-        if len(argv) >= len(prefix) and all(p == "*" or p == a for p, a in zip(prefix, argv)):
+    argv = list(argv)
+    for cmd in ALLOWED_COMMANDS:
+        n = len(cmd.prefix)
+        if len(argv) < n or not all(p == a if p != "*" else _is_value(a) for p, a in zip(cmd.prefix, argv)):
+            continue
+        rest, positionals, ok = argv[n:], 0, True
+        i = 0
+        while i < len(rest):
+            arg = rest[i]
+            if arg in cmd.flags:
+                i += 1
+            elif arg in cmd.options and i + 1 < len(rest) and _is_value(rest[i + 1]):
+                i += 2
+            elif _is_value(arg) and positionals < cmd.positionals:
+                positionals += 1
+                i += 1
+            else:
+                ok = False
+                break
+        if ok:
             return True
     return False
 
@@ -507,7 +582,8 @@ def find_xcodeprojs(root: str, max_depth: int = 4) -> List[str]:
         keep = []
         for d in sorted(dirnames):
             if d.endswith(".xcodeproj"):
-                if os.path.isfile(os.path.join(dirpath, d, "project.pbxproj")):
+                if os.path.isfile(os.path.join(dirpath, d, "project.pbxproj")) and \
+                        path_allowed(os.path.join(dirpath, d, "project.pbxproj")):
                     found.append(os.path.join(dirpath, d))
             elif d not in SKIP_DIRS and not d.startswith("."):
                 keep.append(d)
@@ -574,6 +650,33 @@ def read_build_settings(path: str) -> Dict[str, List[str]]:
             if sm:
                 add(sm.group(1), _unquote(sm.group(2)))
     return settings
+
+
+_XCCONFIG_LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?)\s*=\s*(.*?)\s*;?\s*$")
+
+
+def read_xcconfig_settings(root: str) -> Dict[str, List[str]]:
+    """Settings from every .xcconfig under `root`. Comments and #include lines are skipped; like
+    read_build_settings, values from all files are merged into {KEY: [distinct values]}."""
+    settings: Dict[str, List[str]] = {}
+    for dirpath, _, files in walk(root):
+        for f in files:
+            if not f.endswith(".xcconfig"):
+                continue
+            for line in read_text(os.path.join(dirpath, f)).splitlines():
+                line = line.split("//", 1)[0]
+                m = _XCCONFIG_LINE.match(line)
+                if m and not line.lstrip().startswith("#"):
+                    bucket = settings.setdefault(m.group(1), [])
+                    if m.group(2) not in bucket:
+                        bucket.append(m.group(2))
+    return settings
+
+
+def project_dir(path: str) -> str:
+    """Directory containing the .xcodeproj for a .xcodeproj or project.pbxproj path."""
+    pbx = resolve_pbxproj(path)
+    return os.path.dirname(os.path.dirname(os.path.abspath(pbx)))
 
 
 def setting_values(settings: Dict[str, List[str]], key: str) -> List[str]:

@@ -19,24 +19,41 @@ SKILLS_DIR = os.environ.get("IOS_DEBUG_SKILLS_DIR") or os.path.join(os.path.dirn
 _modules: Dict[str, Any] = {}
 
 
-def load(skill: str, script: str):
-    """Import skills/<skill>/scripts/<script>.py once (scripts share one `_common` module)."""
-    key = f"{skill}/{script}"
-    if key not in _modules:
-        path = os.path.join(SKILLS_DIR, skill, "scripts", f"{script}.py")
-        if not os.path.isfile(path):
-            raise RuntimeError(f"skill script not found: {path} (set IOS_DEBUG_SKILLS_DIR)")
-        spec = importlib.util.spec_from_file_location(f"skill_{skill.replace('-', '_')}_{script}", path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = module
+class SkillsNotFound(RuntimeError):
+    """The skills/ directory (or a script in it) is missing; reported to the client as a tool error."""
+
+
+def _exec(name: str, path: str):
+    if not os.path.isfile(path):
+        raise SkillsNotFound(f"skill script not found: {path} (set IOS_DEBUG_SKILLS_DIR to the repo's skills/ folder)")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
         spec.loader.exec_module(module)
-        _modules[key] = module
-    return _modules[key]
+    except BaseException:
+        sys.modules.pop(name, None)  # never leave a half-initialised module behind
+        raise
+    return module
 
 
 def common():
-    load("xcode-build-signing", "check_plist")
+    """The helper every skill script imports as `_common` (all copies are byte-identical, enforced
+    by tools/sync_common.py). Loaded explicitly and first, so redaction and the path guard never
+    depend on which script happened to be imported before."""
+    if "_common" not in sys.modules:
+        _exec("_common", os.path.join(SKILLS_DIR, "xcode-build-signing", "scripts", "_common.py"))
     return sys.modules["_common"]
+
+
+def load(skill: str, script: str):
+    """Import skills/<skill>/scripts/<script>.py once."""
+    key = f"{skill}/{script}"
+    if key not in _modules:
+        common()
+        _modules[key] = _exec(f"skill_{skill.replace('-', '_')}_{script}",
+                              os.path.join(SKILLS_DIR, skill, "scripts", f"{script}.py"))
+    return _modules[key]
 
 
 @dataclass
@@ -109,7 +126,7 @@ def S(desc: str, **extra) -> Dict[str, Any]:
 
 
 def I(desc: str, lo: int, hi: int, default: int) -> Dict[str, Any]:
-    return {"type": "integer", "description": f"{desc} (default {default})", "minimum": lo, "maximum": hi}
+    return {"type": "integer", "description": desc, "minimum": lo, "maximum": hi, "default": default}
 
 
 def B(desc: str) -> Dict[str, Any]:
@@ -125,6 +142,11 @@ PLIST_EXTS = (".plist", ".entitlements", ".mobileprovision", ".provisionprofile"
 PROFILE_EXTS = (".mobileprovision", ".provisionprofile")
 PROJECT_EXTS = (".xcodeproj", ".pbxproj")
 LOG_EXTS = (".log", ".txt", ".xcactivitylog")
+
+
+def _kw(a: Dict[str, Any], *names: str) -> Dict[str, Any]:
+    """Only the arguments the caller actually passed, so each script's own defaults apply."""
+    return {n: a[n] for n in names if a.get(n) is not None}
 
 
 def _opt(policy: PathPolicy, value: Optional[str], **kw) -> Optional[str]:
@@ -148,7 +170,7 @@ def h_environment(a, p):
 
 def h_find_projects(a, p):
     root = p.resolve(a.get("root") or p.default_root(), kind="dir")
-    return load("xcode-build-signing", "xcode_env").projects(root, a.get("max_depth", 5))
+    return load("xcode-build-signing", "xcode_env").projects(root, **_kw(a, "max_depth"))
 
 
 def h_list_schemes(a, p):
@@ -158,13 +180,16 @@ def h_list_schemes(a, p):
 
 def h_build_settings(a, p):
     path = p.resolve(a["path"], kind="dir", exts=(".xcodeproj", ".xcworkspace"))
-    return load("xcode-build-signing", "xcode_env").settings(path, a.get("scheme"), a.get("configuration"),
-                                                             a.get("target"), a.get("keys"), a.get("all", False))
+    result = load("xcode-build-signing", "xcode_env").settings(
+        path, scheme=a.get("scheme"), configuration=a.get("configuration"), target=a.get("target"),
+        keys=a.get("keys"), all_keys=bool(a.get("all")))
+    # Build settings can carry xcconfig secrets (SENTRY_AUTH_TOKEN, *_API_KEY): mask by key name too.
+    return common().redact_obj(result)
 
 
 def h_build_logs(a, p):
     _system(p)
-    return load("xcode-build-signing", "xcode_env").logs(a.get("project"), a.get("limit", 5))
+    return load("xcode-build-signing", "xcode_env").logs(**_kw(a, "project", "limit", "kind"))
 
 
 def h_build_errors(a, p):
@@ -172,8 +197,7 @@ def h_build_errors(a, p):
     if bool(a.get("path")) == bool(a.get("text")):
         raise ArgumentError("pass exactly one of path or text")
     path = _opt(p, a.get("path"), kind="file", exts=LOG_EXTS)
-    return mod.analyze(path=path, text=a.get("text"), include_warnings=a.get("include_warnings", False),
-                       max_items=a.get("max_items", 50))
+    return mod.analyze(path=path, text=a.get("text"), **_kw(a, "include_warnings", "max_items"))
 
 
 def h_read_plist(a, p):
@@ -194,7 +218,7 @@ def h_check_info_plist(a, p):
     plist = _opt(p, a.get("plist"), kind="any", exts=(".plist", ".app"))
     project = _opt(p, a.get("project"), kind="any", exts=PROJECT_EXTS)
     sources = p.resolve_many(a["sources"], kind="any") if a.get("sources") else None
-    return load("xcode-build-signing", "check_plist").analyze(plist, sources, project, a.get("built", False))
+    return load("xcode-build-signing", "check_plist").analyze(plist, sources, project, built=bool(a.get("built")))
 
 
 def h_bundle_resources(a, p):
@@ -205,7 +229,7 @@ def h_bundle_resources(a, p):
 
 def h_inspect_profile(a, p):
     return load("xcode-build-signing", "inspect_signing").inspect_profile(
-        p.resolve(a["path"], kind="file", exts=PROFILE_EXTS), a.get("check_keychain", False))
+        p.resolve(a["path"], kind="file", exts=PROFILE_EXTS), check_keychain=bool(a.get("check_keychain")))
 
 
 def h_list_profiles(a, p):
@@ -259,7 +283,7 @@ def h_mapkit(a, p):
 
 
 def h_simulators(a, p):
-    return load("ios-crash-log-triage", "sim_logs").devices(a.get("booted_only", False))
+    return load("ios-crash-log-triage", "sim_logs").devices(booted_only=bool(a.get("booted_only")))
 
 
 def h_devices(a, p):
@@ -267,9 +291,8 @@ def h_devices(a, p):
 
 
 def h_sim_logs(a, p):
-    return load("ios-crash-log-triage", "sim_logs").logs(
-        a.get("device", "booted"), a.get("last", "5m"), a.get("process"), a.get("subsystem"), a.get("category"),
-        a.get("contains"), a.get("errors_only", False), a.get("level", "default"), a.get("max_lines", 300))
+    return load("ios-crash-log-triage", "sim_logs").logs(**_kw(
+        a, "device", "last", "process", "subsystem", "category", "contains", "errors_only", "level", "max_lines"))
 
 
 def h_scan_log(a, p):
@@ -284,13 +307,12 @@ def h_crash_list(a, p):
     dirs = [p.resolve(a["dir"], kind="dir")] if a.get("dir") else None
     if dirs is None:
         _system(p)
-    return load("ios-crash-log-triage", "crash_report").list_reports(dirs, a.get("app"), a.get("limit", 20),
-                                                                     a.get("crashes_only", False))
+    return load("ios-crash-log-triage", "crash_report").list_reports(dirs, **_kw(a, "app", "limit", "crashes_only"))
 
 
 def h_crash_summary(a, p):
     return load("ios-crash-log-triage", "crash_report").summarize(
-        p.resolve(a["path"], kind="file", exts=(".ips", ".crash")), a.get("max_frames", 15))
+        p.resolve(a["path"], kind="file", exts=(".ips", ".crash")), **_kw(a, "max_frames"))
 
 
 PATHS = A("Swift files or directories (relative paths resolve against the project root; default: project root)")
@@ -314,8 +336,12 @@ TOOLS: List[Tool] = [
           "target": S("target name"), "configuration": S("e.g. Debug or Release"),
           "keys": A("only these settings"), "all": B("return every setting")},
          h_build_settings, ["path"]),
-    Tool("find_build_logs", "Find build logs", "Newest .xcactivitylog files in DerivedData.",
-         {"project": S("DerivedData folder prefix, usually the project name"), "limit": I("max logs", 1, 50, 5)},
+    Tool("find_build_logs", "Find build logs",
+         "Newest .xcactivitylog files in DerivedData: Build logs by default (feed one to extract_build_errors); "
+         "pass kind for Test/Package logs.",
+         {"project": S("DerivedData folder prefix, usually the project name"), "limit": I("max logs", 1, 50, 5),
+          "kind": {"type": "string", "enum": ["Build", "Test", "Package", "Launch", "Localization", "all"],
+                   "default": "Build", "description": "log folder; Build is what extract_build_errors needs"}},
          h_build_logs),
     Tool("extract_build_errors", "Extract build errors",
          "Parse xcodebuild output or an .xcactivitylog: de-duplicated errors classified as signing, provisioning, "
@@ -415,7 +441,15 @@ BY_NAME = {t.name: t for t in TOOLS}
 
 def call(name: str, args: Any, policy: PathPolicy) -> Any:
     tool = BY_NAME[name]
-    return tool.handler(validate(tool, args), policy)
+    args = validate(tool, args)
+    c = common()
+    # Every file a script walks to or opens during this call must pass the same policy as the
+    # path arguments, so a symlink inside a scanned project cannot reach outside the roots.
+    c.PATH_GUARD = policy.allows
+    try:
+        return tool.handler(args, policy)
+    finally:
+        c.PATH_GUARD = None
 
 
-__all__ = ["TOOLS", "BY_NAME", "call", "ArgumentError", "PolicyError", "common"]
+__all__ = ["TOOLS", "BY_NAME", "call", "ArgumentError", "PolicyError", "SkillsNotFound", "common"]
